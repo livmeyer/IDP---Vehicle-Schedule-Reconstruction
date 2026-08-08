@@ -5,6 +5,6 @@
     "date": "2026-05-04",
     "generateDeadheadMat": false,
     "api_key": "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImVmY2E4ZWQwMjk3YTQ0YzdhNDEyNzgyMGExODAwOGQ2IiwiaCI6Im11cm11cjY0In0=",
-    "deadheadFile": "deadheads-05-04.csv",
+    "deadheadFile": "deadheads-05-04.npz",
     "minimumTerminal": 5
-}
+}[float]

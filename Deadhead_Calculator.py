@@ -2,15 +2,12 @@ from collections import defaultdict
 
 
 from gtfs_parser import GTFS
-import numpy as np
-from numpy.f2py.auxfuncs import throw_error
 from openrouteservice import Client
 import pandas as pd
-
-
+from scipy import sparse as sp
 
 class DeadheadDistanceLookup:
-    def __init__(self, deadhead_mat, starting_stops: pd.Series, depot_stops: pd.Series, ending_stops: pd.Series):
+    def __init__(self, deadhead_mat: sp.csc_array, starting_stops: pd.Series, depot_stops: pd.Series, ending_stops: pd.Series):
         self.depots = depot_stops
         self.matrix = deadhead_mat
         all_stops = pd.concat([
@@ -33,10 +30,10 @@ class DeadheadDistanceLookup:
 
         if dep == "":
             print(self.stop_to_index[stop_id])
-            throw_error("You Fucked Up")
+            raise Exception(f"Stop ID {stop_id} was not found in the compiled deadhead matrix.")
         return dep, minTime
 
-    def get_duration(self, origin_id, destination_id) -> float:
+    def get_duration(self, origin_id: str, destination_id: str) -> float:
         try:
             from_idx = self.stop_to_index[origin_id][0]
             to_idx = self.stop_to_index[destination_id][-1]
@@ -60,11 +57,8 @@ def calculate_all_deadheads(trips: pd.DataFrame, depots: pd.DataFrame, parsed_gt
             endingPoints[["stop_lon", "stop_lat"]],
         ], ignore_index=True).itertuples(index=False, name=None))
 
-        xLen = len(startingPoints) + len(depots)
-        yLen = len(endingPoints) + len(depots)
-
         # Construct Matrix of Deadheading Distances
-        deadhead_mat = np.full((xLen, yLen), np.inf)
+        deadhead_mat = sp.csc_array((len(coords), len(coords)))
         ors_client = Client(key=api_key)
         for i in range(0, startingPoints.shape[0] + depots.shape[0], 50):
             for j in range(startingPoints.shape[0], len(coords), 50):
@@ -75,11 +69,9 @@ def calculate_all_deadheads(trips: pd.DataFrame, depots: pd.DataFrame, parsed_gt
                     destinations=list(range(j, min(len(coords), j + 50))),
                     metrics=["duration"],
                 )
-                xInd = i - xLen
-                yInd = j - yLen
-                deadhead_mat[xInd:min(deaheadMat.shape[0], xInd + 50), yInd::min(deadheadMat.shape[1], yInd + 50)] = resp['durations']
-        np.savetxt(deadhead_filepath, deadhead_mat, delimiter=",")
+                deadhead_mat[i:min(len(coords), i + 50), j:min(len(coords), j + 50)] = resp['durations']
+        sp.save_npz(deadhead_filepath, deadhead_mat)
     else:
-        deadhead_mat = np.loadtxt(deadhead_filepath, delimiter=",")
+        deadhead_mat = sp.load_npz(deadhead_filepath)
 
     return DeadheadDistanceLookup(deadhead_mat, startingPoints['stop_id'], depots['stop_id'], endingPoints['stop_id'])
