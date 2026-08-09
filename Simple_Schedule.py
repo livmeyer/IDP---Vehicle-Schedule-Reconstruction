@@ -1,17 +1,15 @@
-import csv
 from collections import defaultdict
+import csv
 from datetime import timedelta
-import pandas as pd
 from gtfs_parser import GTFS
+import pandas as pd
 
 from Configuration import Config
 from Deadhead_Calculator import DeadheadDistanceLookup
 
-
 def parse_gtfs_time(time_str: str) -> timedelta:
     hours, minutes, seconds = map(int, time_str.split(":"))
     return timedelta(hours=hours, minutes=minutes, seconds=seconds)
-
 
 def format_gtfs_timedelta(td: timedelta) -> str:
     total_seconds = int(td.total_seconds())
