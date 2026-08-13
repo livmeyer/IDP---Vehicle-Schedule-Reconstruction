@@ -22,13 +22,11 @@ def add_minutes_to_gtfs_time(time_str: str, minutes_to_add: int = 5) -> str:
     td = parse_gtfs_time(time_str) + timedelta(minutes=minutes_to_add)
     return format_gtfs_timedelta(td)
 
-
 def subtract_minutes_from_gtfs_time(time_str: str, minutes_to_subtract: int = 5) -> str:
     td = parse_gtfs_time(time_str) - timedelta(minutes=minutes_to_subtract)
     if td.total_seconds() < 0:
         raise ValueError(f"Resulting time would be negative: {time_str} minus {minutes_to_subtract} minutes")
     return format_gtfs_timedelta(td)
-
 
 def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup, gtfs: GTFS, config: Config) -> pd.DataFrame:
     # Extract unique route names
@@ -60,10 +58,10 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
 
                 # Search for an available vehicle at the terminal station
                 if available_vehicles[trip.parent_station]:
-                    for vehicle, avail_time in available_vehicles[trip.parent_station]:
-                        if avail_time <= trip.time:
+                    for vehicle, avail_time, max_wait in available_vehicles[trip.parent_station]:
+                        if avail_time <= trip.time and trip.time <= max_wait:
                             assigned_vehicles[trip.trip_id] = vehicle
-                            matching_vehicle = (vehicle, avail_time)
+                            matching_vehicle = (vehicle, avail_time, max_wait)
                             break
 
                 if matching_vehicle:
@@ -77,8 +75,9 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
             else:
                 # Trip finishes: Return vehicle back to terminal station pool after cleanup buffer
                 ready_time = add_minutes_to_gtfs_time(trip.time, config.minimumTerminal)
+                max_wait = add_minutes_to_gtfs_time(trip.time, config.maximumTerminal)
                 v_id = assigned_vehicles.pop(trip.trip_id)
-                available_vehicles[trip.parent_station].append((v_id, ready_time))
+                available_vehicles[trip.parent_station].append((v_id, ready_time, max_wait))
 
     # Deadheading Calculation Stage
     deadhead_rows = []

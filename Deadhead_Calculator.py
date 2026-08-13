@@ -7,7 +7,7 @@ from scipy import sparse as sp
 import sys
 
 class DeadheadDistanceLookup:
-    def __init__(self, deadhead_mat: sp.csc_array, starting_stops: pd.Series, depot_stops: pd.Series, ending_stops: pd.Series):
+    def __init__(self, deadhead_mat, starting_stops: pd.Series, depot_stops: pd.Series, ending_stops: pd.Series):
         self.depots = depot_stops
         self.matrix = deadhead_mat
         all_stops = pd.concat([

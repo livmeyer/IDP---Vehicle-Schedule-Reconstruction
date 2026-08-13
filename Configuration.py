@@ -14,6 +14,7 @@ class Config(BaseModel):
     deadheadFile: str = "config.json"
 
     minimumTerminal: int = 5
+    maximumTerminal: int = 40
 
     @classmethod
     def generate_config(cls, filepath: str = 'config.json'):

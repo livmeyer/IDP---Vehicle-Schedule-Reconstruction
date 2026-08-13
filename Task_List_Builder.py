@@ -12,26 +12,27 @@ def build_task_list_no_block(gtfs_data: GTFS, schedule_date: datetime.date, rout
     bus_trips = gtfs_data.trips.loc[gtfs_data.trips["route_id"].isin(bus_route_ids), ["route_id", "trip_id", "block_id", "service_id"]]
 
     # Filter by Date
-    relevant_services = gtfs_data.calendar[
-        (gtfs_data.calendar[schedule_date.strftime("%A").lower()] == "1") &
-        (gtfs_data.calendar["start_date"] <= schedule_date.strftime("%Y%m%d")) &
-        (gtfs_data.calendar["end_date"] >= schedule_date.strftime("%Y%m%d"))
-        ].merge(
-        gtfs_data.calendar_dates[
-            (gtfs_data.calendar_dates["date"] == schedule_date.strftime("%Y%m%d")) &
-            (gtfs_data.calendar_dates["exception_type"] == "2")
-            ],
-        on="service_id",
-        how="left_anti"
-    )
-    relevant_services = pd.concat([
-        relevant_services,
-        gtfs_data.calendar_dates[
-            (gtfs_data.calendar_dates["date"] == schedule_date.strftime("%Y%m%d")) &
-            (gtfs_data.calendar_dates["exception_type"] == "1")
+    if gtfs_data.calendar is not None and gtfs_data.calendar_dates is not None:
+        relevant_services = gtfs_data.calendar[
+            (gtfs_data.calendar[schedule_date.strftime("%A").lower()] == "1") &
+            (gtfs_data.calendar["start_date"] <= schedule_date.strftime("%Y%m%d")) &
+            (gtfs_data.calendar["end_date"] >= schedule_date.strftime("%Y%m%d"))
+            ].merge(
+            gtfs_data.calendar_dates[
+                (gtfs_data.calendar_dates["date"] == schedule_date.strftime("%Y%m%d")) &
+                (gtfs_data.calendar_dates["exception_type"] == "2")
+                ],
+            on="service_id",
+            how="left_anti"
+        )
+        relevant_services = pd.concat([
+            relevant_services,
+            gtfs_data.calendar_dates[
+                (gtfs_data.calendar_dates["date"] == schedule_date.strftime("%Y%m%d")) &
+                (gtfs_data.calendar_dates["exception_type"] == "1")
             ]["service_id"]
-    ])
-    bus_trips = bus_trips.merge(relevant_services, on="service_id", how="inner")
+        ])
+        bus_trips = bus_trips.merge(relevant_services, on="service_id", how="inner")
 
     # Get Relevant Stop Times
     stop_times = gtfs_data.stop_times[["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"]]
