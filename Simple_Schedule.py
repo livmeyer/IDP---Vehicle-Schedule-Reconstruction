@@ -42,7 +42,10 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
     # Enrich the input trips dataframe with station information
     trips = trips.merge(gtfs.stops, on="stop_id")[["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]]
 
-    for route in ["142", "54"]:  # route_names["route_short_name"].unique():
+    # The total wait time of all vehicles is a heuristic on how good how efficient the vehicle schedule is
+    nonservice_operational_time = timedelta()
+
+    for route in ["185"]: # route_names["route_short_name"].unique():
         available_vehicles = defaultdict(list)
         assigned_vehicles = {}
 
@@ -62,6 +65,7 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
                         if avail_time <= trip.time and trip.time <= max_wait:
                             assigned_vehicles[trip.trip_id] = vehicle
                             matching_vehicle = (vehicle, avail_time, max_wait)
+                            nonservice_operational_time += parse_gtfs_time(trip.time) - parse_gtfs_time(avail_time)
                             break
 
                 if matching_vehicle:
@@ -98,8 +102,9 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
         last_route = last_trip['route_id'].iloc[0]
         last_time = last_trip['time'].iloc[0]
 
-        depot, deadhead_duration = deadhead_lookup.from_depot(first_stop)
-        deadhead_minutes = int(deadhead_duration / 60)
+        depot, deadhead_begin = deadhead_lookup.from_depot(first_stop)
+        deadhead_end = deadhead_lookup.get_duration(depot, last_stop)
+        nonservice_operational_time += timedelta(minutes = config.minimumTerminal, seconds= deadhead_begin + deadhead_end)
 
         depart_trip_name = f"{vehicle}_fromDepot"
         return_trip_name = f"{vehicle}_toDepot"
@@ -109,7 +114,7 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
                 'stop_id': depot,
                 'route_id': first_route,
                 'trip_id': depart_trip_name,
-                'time': subtract_minutes_from_gtfs_time(first_time, config.minimumTerminal + deadhead_minutes),
+                'time': subtract_minutes_from_gtfs_time(first_time, config.minimumTerminal + int(deadhead_begin / 60)),
                 'start': True,
                 'parent_station': ''
             },
@@ -133,7 +138,7 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
                 'stop_id': depot,
                 'route_id': first_route,
                 'trip_id': return_trip_name,
-                'time': add_minutes_to_gtfs_time(last_time, int(deadhead_lookup.get_duration(depot, last_stop)/60)),
+                'time': add_minutes_to_gtfs_time(last_time, int(deadhead_end /60)),
                 'start': False,
                 'parent_station': ''
             }
@@ -151,8 +156,10 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
 
     with open("sup_vehicleAssignments.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
+        writer.writerow(["vehicle_id", "trip_id"])
         for vehicle, tasks in vehicles_and_trips.items():
             for task in tasks:
                 writer.writerow([vehicle, task])
 
+    print(f"Total nonoperational time: {nonservice_operational_time}")
     return trips
