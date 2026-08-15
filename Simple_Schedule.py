@@ -1,158 +1,184 @@
 from collections import defaultdict
 import csv
-from datetime import timedelta
-from gtfs_parser import GTFS
+import heapq
 import pandas as pd
 
 from Configuration import Config
 from Deadhead_Calculator import DeadheadDistanceLookup
 
-def parse_gtfs_time(time_str: str) -> timedelta:
-    hours, minutes, seconds = map(int, time_str.split(":"))
-    return timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
-def format_gtfs_timedelta(td: timedelta) -> str:
-    total_seconds = int(td.total_seconds())
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
+def time_to_seconds(time_str: str) -> int:
+    h, m, s = time_str.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+def seconds_to_time(total_seconds: int) -> str:
+    if total_seconds < 0:
+        raise ValueError("Resulting time cannot be negative.")
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = int(total_seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-def add_minutes_to_gtfs_time(time_str: str, minutes_to_add: int = 5) -> str:
-    td = parse_gtfs_time(time_str) + timedelta(minutes=minutes_to_add)
-    return format_gtfs_timedelta(td)
+#def assign_vehicles_on_route(target_routes: list(str)):
 
-def subtract_minutes_from_gtfs_time(time_str: str, minutes_to_subtract: int = 5) -> str:
-    td = parse_gtfs_time(time_str) - timedelta(minutes=minutes_to_subtract)
-    if td.total_seconds() < 0:
-        raise ValueError(f"Resulting time would be negative: {time_str} minus {minutes_to_subtract} minutes")
-    return format_gtfs_timedelta(td)
 
-def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup, gtfs: GTFS, config: Config) -> pd.DataFrame:
-    # Extract unique route names
-    route_names = (
-        trips[["route_id"]]
-        .drop_duplicates()
-        .merge(gtfs.routes, on="route_id")[["route_id", "route_short_name"]]
-    )
+def build_schedule(
+        trips: pd.DataFrame,
+        deadhead_lookup: DeadheadDistanceLookup,
+        gtfs,
+        config: Config,
+    ) -> pd.DataFrame:
+    min_terminal_sec = config.minimumTerminal * 60
+    max_terminal_sec = config.maximumTerminal * 60
+
+    trips = trips.merge(gtfs.stops, on="stop_id")[
+        ["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]
+    ]
+    trips["time_sec"] = trips["time"].apply(time_to_seconds)
+
+    route_map = gtfs.routes.set_index("route_id")["route_short_name"].to_dict()
+    trips["route_short_name"] = trips["route_id"].map(route_map)
 
     vehicle_id_counter = 0
     vehicles_and_trips = defaultdict(list)
+    total_nonservice_sec = 0
 
-    # Enrich the input trips dataframe with station information
-    trips = trips.merge(gtfs.stops, on="stop_id")[["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]]
+    vehicle_first_trip = {}
+    vehicle_last_trip = {}
 
-    # The total wait time of all vehicles is a heuristic on how good how efficient the vehicle schedule is
-    nonservice_operational_time = timedelta()
+    # Target routes filter (hardcoded or dynamic)
+    target_routes = {"185"}
 
-    for route in ["185"]: # route_names["route_short_name"].unique():
+    for route_name in target_routes:
         available_vehicles = defaultdict(list)
         assigned_vehicles = {}
 
-        route_ids_on_route = route_names[route_names["route_short_name"] == route]["route_id"]
-        tasks_on_route = trips[trips["route_id"].isin(route_ids_on_route)].sort_values("time")
+        tasks_on_route = trips[trips["route_short_name"] == route_name].sort_values(
+            "time_sec"
+        )
 
         if len(tasks_on_route) < 8:
             continue
 
         for trip in tasks_on_route.itertuples():
+            t_sec = trip.time_sec
+            station = trip.parent_station
+
             if trip.start:
-                matching_vehicle = None
+                matched_vehicle = None
 
-                # Search for an available vehicle at the terminal station
-                if available_vehicles[trip.parent_station]:
-                    for vehicle, avail_time, max_wait in available_vehicles[trip.parent_station]:
-                        if avail_time <= trip.time and trip.time <= max_wait:
-                            assigned_vehicles[trip.trip_id] = vehicle
-                            matching_vehicle = (vehicle, avail_time, max_wait)
-                            nonservice_operational_time += parse_gtfs_time(trip.time) - parse_gtfs_time(avail_time)
-                            break
+                station_heap = available_vehicles[station]
+                while station_heap and station_heap[0][1] < t_sec:
+                    heapq.heappop(station_heap)
 
-                if matching_vehicle:
-                    available_vehicles[trip.parent_station].remove(matching_vehicle)
-                else:
-                    # Create a new vehicle allocation
-                    assigned_vehicles[trip.trip_id] = vehicle_id_counter
+                # Check if there's a valid available vehicle
+                if station_heap and station_heap[0][0] <= t_sec:
+                    avail_time_sec, max_wait_sec, v_id = heapq.heappop(station_heap)
+                    assigned_vehicles[trip.trip_id] = v_id
+                    matched_vehicle = v_id
+                    total_nonservice_sec += t_sec - avail_time_sec
+
+                if matched_vehicle is None:
+                    v_id = vehicle_id_counter
+                    assigned_vehicles[trip.trip_id] = v_id
                     vehicle_id_counter += 1
 
-                vehicles_and_trips[assigned_vehicles[trip.trip_id]].append(trip.trip_id)
-            else:
-                # Trip finishes: Return vehicle back to terminal station pool after cleanup buffer
-                ready_time = add_minutes_to_gtfs_time(trip.time, config.minimumTerminal)
-                max_wait = add_minutes_to_gtfs_time(trip.time, config.maximumTerminal)
-                v_id = assigned_vehicles.pop(trip.trip_id)
-                available_vehicles[trip.parent_station].append((v_id, ready_time, max_wait))
+                v_assigned = assigned_vehicles[trip.trip_id]
+                vehicles_and_trips[v_assigned].append(trip.trip_id)
 
-    # Deadheading Calculation Stage
+                if v_assigned not in vehicle_first_trip:
+                    vehicle_first_trip[v_assigned] = trip
+
+            else:
+                ready_sec = t_sec + min_terminal_sec
+                max_wait_sec = t_sec + max_terminal_sec
+                v_id = assigned_vehicles.pop(trip.trip_id)
+
+                heapq.heappush(available_vehicles[station], (ready_sec, max_wait_sec, v_id))
+
+                vehicle_last_trip[v_id] = trip
+
     deadhead_rows = []
 
     for vehicle in range(vehicle_id_counter):
-        vehicle_trips = trips[trips["trip_id"].isin(vehicles_and_trips[vehicle])]
-        if vehicle_trips.empty:
+        if vehicle not in vehicle_first_trip:
             continue
 
-        first_trip = vehicle_trips.iloc[vehicle_trips['time'] == vehicle_trips['time'].min()]
-        last_trip = vehicle_trips[vehicle_trips['time'] == vehicle_trips['time'].max()]
+        first_trip = vehicle_first_trip[vehicle]
+        last_trip = vehicle_last_trip[vehicle]
 
-        first_stop = first_trip['stop_id'].iloc[0]
-        first_route = first_trip['route_id'].iloc[0]
-        first_time = first_trip['time'].iloc[0]
-
-        last_stop = last_trip['stop_id'].iloc[0]
-        last_route = last_trip['route_id'].iloc[0]
-        last_time = last_trip['time'].iloc[0]
+        first_stop, first_route, first_time_sec = (
+            first_trip.stop_id,
+            first_trip.route_id,
+            first_trip.time_sec,
+        )
+        last_stop, last_route, last_time_sec = (
+            last_trip.stop_id,
+            last_trip.route_id,
+            last_trip.time_sec,
+        )
 
         depot, deadhead_begin = deadhead_lookup.from_depot(first_stop)
         deadhead_end = deadhead_lookup.get_duration(depot, last_stop)
-        nonservice_operational_time += timedelta(minutes = config.minimumTerminal, seconds= deadhead_begin + deadhead_end)
+
+        total_nonservice_sec += min_terminal_sec + deadhead_begin + deadhead_end
 
         depart_trip_name = f"{vehicle}_fromDepot"
         return_trip_name = f"{vehicle}_toDepot"
 
+        # Calculate exact seconds directly
+        depot_depart_sec = first_time_sec - min_terminal_sec - int(deadhead_begin)
+        station_arrive_sec = first_time_sec - min_terminal_sec
+        depot_return_sec = last_time_sec + int(deadhead_end)
+
         deadhead_rows.extend([
             {
-                'stop_id': depot,
-                'route_id': first_route,
-                'trip_id': depart_trip_name,
-                'time': subtract_minutes_from_gtfs_time(first_time, config.minimumTerminal + int(deadhead_begin / 60)),
-                'start': True,
-                'parent_station': ''
+                "stop_id": depot,
+                "route_id": first_route,
+                "trip_id": depart_trip_name,
+                "time": seconds_to_time(depot_depart_sec),
+                "time_sec": depot_depart_sec,
+                "start": True,
+                "parent_station": "",
             },
             {
-                'stop_id': first_stop,
-                'route_id': first_route,
-                'trip_id': depart_trip_name,
-                'time': subtract_minutes_from_gtfs_time(first_time, config.minimumTerminal),
-                'start': False,
-                'parent_station': ''
+                "stop_id": first_stop,
+                "route_id": first_route,
+                "trip_id": depart_trip_name,
+                "time": seconds_to_time(station_arrive_sec),
+                "time_sec": station_arrive_sec,
+                "start": False,
+                "parent_station": "",
             },
             {
-                'stop_id': last_stop,
-                'route_id': last_route,
-                'trip_id': return_trip_name,
-                'time': last_time,
-                'start': True,
-                'parent_station': ''
+                "stop_id": last_stop,
+                "route_id": last_route,
+                "trip_id": return_trip_name,
+                "time": seconds_to_time(last_time_sec),
+                "time_sec": last_time_sec,
+                "start": True,
+                "parent_station": "",
             },
             {
-                'stop_id': depot,
-                'route_id': first_route,
-                'trip_id': return_trip_name,
-                'time': add_minutes_to_gtfs_time(last_time, int(deadhead_end /60)),
-                'start': False,
-                'parent_station': ''
-            }
+                "stop_id": depot,
+                "route_id": first_route,
+                "trip_id": return_trip_name,
+                "time": seconds_to_time(depot_return_sec),
+                "time_sec": depot_return_sec,
+                "start": False,
+                "parent_station": "",
+            },
         ])
 
-        # Track generated deadheads inside assignment structures
         vehicles_and_trips[vehicle].extend([depart_trip_name, return_trip_name])
 
-    # Efficient batch append execution
     if deadhead_rows:
         trips = pd.concat([trips, pd.DataFrame(deadhead_rows)], ignore_index=True)
 
-    # Output exports
-    trips.to_csv("sup_trips.txt", index=False)
+    output_trips = trips.drop(columns=["time_sec", "route_short_name"], errors="ignore")
+
+    output_trips.to_csv("sup_trips.csv", index=False)
 
     with open("sup_vehicleAssignments.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -161,5 +187,5 @@ def build_schedule(trips: pd.DataFrame, deadhead_lookup: DeadheadDistanceLookup,
             for task in tasks:
                 writer.writerow([vehicle, task])
 
-    print(f"Total nonoperational time: {nonservice_operational_time}")
+    print(f"Total nonoperational time (seconds): {total_nonservice_sec} ({seconds_to_time(total_nonservice_sec)})")
     return trips
