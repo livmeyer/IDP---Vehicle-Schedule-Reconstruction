@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+import numpy as np
 from gtfs_parser import GTFS
 from openrouteservice import Client
 import pandas as pd
@@ -41,6 +42,13 @@ class DeadheadDistanceLookup:
 
         except KeyError as e:
             raise KeyError(f"Stop ID {e} was not found in the compiled deadhead matrix.")
+
+    def construct_mat(self, stops: list[str]) -> np.ndarray:
+        res = np.zeros((len(stops), len(stops)))
+        for x_idx, x_stop in enumerate(stops):
+            for y_idx, y_stop in enumerate(stops):
+                res[x_idx][y_idx] = self.get_duration(x_stop, y_stop)
+        return res
 
 
 def calculate_all_deadheads(trips: pd.DataFrame, depots: pd.DataFrame, parsed_gtfs: GTFS, use_api: bool, api_key: str,

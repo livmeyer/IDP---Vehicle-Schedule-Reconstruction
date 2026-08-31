@@ -37,12 +37,13 @@ def create_schedule(config_path: str = 'config.json'):
 
     # Identify Deadheading Distances
     print_message("Calculate Deadheading Costs")
-    deadHeadLookup = Deadhead_Calculator.calculate_all_deadheads(tasks, depots, gtfs_data, config.generateDeadheadMat, config.api_key,
+    deadhead_lookup = Deadhead_Calculator.calculate_all_deadheads(tasks, depots, gtfs_data, config.generateDeadheadMat, config.api_key,
                                                                  config.deadheadFile)
 
     # Construct Vehicle Schedule
     print_message("Calculating Vehicle Schedule")
-    Simple_Schedule.build_schedule(tasks, deadHeadLookup, gtfs_data, config)
+    Simple_Schedule.build_schedule(tasks, deadhead_lookup, gtfs_data, config)
+    Simple_Schedule.interlining(tasks, gtfs_data, deadhead_lookup)
 
 
 if __name__ == '__main__':
