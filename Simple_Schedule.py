@@ -1,9 +1,10 @@
 import csv
 import heapq
+import itertools
 from collections import defaultdict
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from gtfs_parser import GTFS
 
 from Configuration import Config
@@ -188,38 +189,48 @@ def build_schedule(
     print(f"Total nonoperational time (seconds): {total_nonservice_sec} ({seconds_to_time(total_nonservice_sec)})")
     return trips
 
-def try_combining_routes(first_line: str, second_line: str):
-    print(first_line, second_line)
+
+def try_combining_routes(first_line: str, first_line_connection: str, second_line: str, second_line_connection: str, trips: pd.DataFrame):
+    # Find Connecting Points
+    trips_first_line = trips[trips["route_id"] == first_line]
+    trips_second_line = trips[trips["route_id"] == second_line]
+    # See if Lines Connect Nicely
+    if trips_first_line[trips_first_line["stop_id"] == first_line_connection].shape[0] == trips_second_line[trips_second_line["stop_id"] == second_line_connection].shape[0]:
+        print(first_line, second_line)
+    # Find Reference Performance
+
     return
 
-def interlining(trips: pd.DataFrame, gtfs : GTFS, dist_lookup: DeadheadDistanceLookup):
+
+def interlining(trips: pd.DataFrame, gtfs: GTFS, dist_lookup: DeadheadDistanceLookup):
     trips = trips.merge(gtfs.stops, on="stop_id")[
         ["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]
     ]
+    # trips = trips[trips["route_id"].isin(["3-54-G-016-2", "3-54-G-016-3", "3-54-G-016-4", "3-142-G-016-1", "3-142-G-016-2"])]
 
-    lines = {}
+    lines = defaultdict(list[str])
 
     for route_name in trips["route_id"].unique().__iter__():
-        val_counts = trips[trips["route_id"] == route_name]["stop_id"].value_counts()
-        sum_terminals = val_counts.sum()
+        trips_on_route = trips[trips["route_id"] == route_name]
+        sum_terminals = len(trips_on_route.index)
         if sum_terminals < 8:
             continue
 
-        # Find candidates where interlining is plausible
-        if val_counts.max() >= sum_terminals//4:
-            for terminal in val_counts[val_counts == val_counts.max()].index.to_list():
-                lines[terminal] = [route_name]
+        parent_stations_count = trips_on_route["parent_station"].value_counts()
+        for parent_station in parent_stations_count[parent_stations_count == parent_stations_count.max()].index:
+            lines[trips_on_route[trips_on_route["parent_station"] == parent_station]["stop_id"].max()].append(route_name)
+
+    for stop, line_list in lines.items():
+        for a, b in itertools.pairwise(line_list):
+            try_combining_routes(a, stop, b, stop, trips)
 
     deadheads = dist_lookup.construct_mat(list(lines.keys()))
     deadheads = np.maximum(deadheads, deadheads.T)
     np.fill_diagonal(deadheads, np.inf)
     deadheads[np.triu_indices_from(deadheads, k=1)] = np.inf
-    possible_combinations = np.argwhere(deadheads <= 600)
-
-    used_indices = set()
+    possible_combinations = np.argwhere(deadheads <= 300)
 
     for u, v in possible_combinations:
-        if u not in used_indices and v not in used_indices:
-            used_indices.add(u)
-            used_indices.add(v)
-            try_combining_routes(list(lines.keys())[u], list(lines.keys())[v])
+        for a in list(lines.values())[u]:
+            for b in list(lines.values())[v]:
+                try_combining_routes(a, u, b, v, trips)
