@@ -1,11 +1,8 @@
 import csv
 import heapq
-import itertools
 from collections import defaultdict
 
-import numpy as np
 import pandas as pd
-from gtfs_parser import GTFS
 
 from Configuration import Config
 from Deadhead_Calculator import DeadheadDistanceLookup
@@ -26,9 +23,11 @@ def seconds_to_time(total_seconds: int) -> str:
 
 
 def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_terminal_sec: int, max_terminal_sec: int,
-                   deadhead_lookup: DeadheadDistanceLookup) -> tuple[defaultdict[int, list[str]], list[dict[str, str | bool | int]], int, int]:
+                   deadhead_lookup: DeadheadDistanceLookup, interlining_mapping: dict[str, dict[str, str]] = {}
+                   ) -> tuple[defaultdict[int, list[str]], list[dict[str, str | bool | int]], int, int]:
     available_vehicles: defaultdict[int, list[str]] = defaultdict(list)
     vehicles_and_trips: defaultdict[int, list[str]] = defaultdict(list)
+    tasks["time_sec"] = tasks["time"].apply(time_to_seconds)
     assigned_vehicles = {}
 
     vehicle_id_counter = start_vehicle_id_counter
@@ -66,15 +65,21 @@ def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_termi
                 vehicle_first_trip[v_assigned] = trip
 
         else:
-            ready_sec = t_sec + min_terminal_sec
-            max_wait_sec = t_sec + max_terminal_sec
+            if (trip.route_id in interlining_mapping) and (trip.parent_station in interlining_mapping[trip.route_id]):
+                dh_time = deadhead_lookup.get_duration(trip.stop_id, interlining_mapping[trip.route_id][trip.parent_station])
+                ready_sec = t_sec + dh_time
+                max_wait_sec = t_sec +  dh_time + max_terminal_sec
+                non_service_sec += dh_time
+            else:
+                ready_sec = t_sec + min_terminal_sec
+                max_wait_sec = t_sec + max_terminal_sec
             v_id = assigned_vehicles.pop(trip.trip_id)
 
             heapq.heappush(available_vehicles[station], (ready_sec, max_wait_sec, v_id))
 
             vehicle_last_trip[v_id] = trip
 
-    deadhead_rows : list[dict[str, str | bool | int]] = []
+    deadhead_rows: list[dict[str, str | bool | int]] = []
 
     for vehicle in range(start_vehicle_id_counter, vehicle_id_counter):
         first_trip = vehicle_first_trip[vehicle]
@@ -151,15 +156,14 @@ def build_schedule(
         trips: pd.DataFrame,
         deadhead_lookup: DeadheadDistanceLookup,
         gtfs,
-        config: Config,
-) -> pd.DataFrame:
+        config: Config
+) -> dict[str, tuple[int, int]]:
     min_terminal_sec = config.minimumTerminal * 60
     max_terminal_sec = config.maximumTerminal * 60
 
     trips = trips.merge(gtfs.stops, on="stop_id")[
         ["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]
     ]
-    trips["time_sec"] = trips["time"].apply(time_to_seconds)
 
     route_map = gtfs.routes.set_index("route_id")["route_short_name"].to_dict()
     trips["route_short_name"] = trips["route_id"].map(route_map)
@@ -168,20 +172,19 @@ def build_schedule(
     vehicles_and_trips: list[defaultdict[int, list[str]]] = []
     total_nonservice_sec = 0
     deadhead_rows: list[dict[str, str | bool | int]] = []
-    route_vehicle_num : dict[str, int] = {}
+    route_vehicle_num: dict[str, tuple[int, int]] = {}
 
     for route_name in trips["route_short_name"].unique().__iter__():
         tasks_on_route = trips[trips["route_short_name"] == route_name].sort_values(
-            "time_sec"
+            "time"
         )
         if len(tasks_on_route) >= 8:
             vnt, dhr, vi, non_service_sec = schedule_tasks(tasks_on_route, vehicle_id_counter, min_terminal_sec, max_terminal_sec, deadhead_lookup)
             vehicles_and_trips.append(vnt)
-            route_vehicle_num[route_name] = vi - vehicle_id_counter
+            route_vehicle_num[route_name] = [vi - vehicle_id_counter, non_service_sec]
             vehicle_id_counter = vi
             deadhead_rows.append(dhr)
             total_nonservice_sec += non_service_sec
-
 
     output_trips = trips.drop(columns=["time_sec", "route_short_name"], errors="ignore")
 
@@ -196,52 +199,4 @@ def build_schedule(
                     writer.writerow([vehicle, task])
 
     print(f"Total nonoperational time (seconds): {total_nonservice_sec} ({seconds_to_time(total_nonservice_sec)})")
-    return trips
-
-
-def try_combining_routes(first_line: str, first_line_connection: str, second_line: str, second_line_connection: str, trips: pd.DataFrame):
-    # Find Connecting Points
-    trips_first_line = trips[trips["route_id"] == first_line]
-    trips_second_line = trips[trips["route_id"] == second_line]
-    # See if Lines Connect Nicely
-    if trips_first_line[trips_first_line["stop_id"] == first_line_connection].shape[0] == \
-            trips_second_line[trips_second_line["stop_id"] == second_line_connection].shape[0]:
-        print(first_line, second_line)
-    # Find Reference Performance
-
-    return
-
-
-def interlining(trips: pd.DataFrame, gtfs: GTFS, dist_lookup: DeadheadDistanceLookup):
-    trips = trips.merge(gtfs.stops, on="stop_id")[
-        ["stop_id", "route_id", "trip_id", "time", "start", "parent_station"]
-    ]
-    # trips = trips[trips["route_id"].isin(["3-54-G-016-2", "3-54-G-016-3", "3-54-G-016-4", "3-142-G-016-1", "3-142-G-016-2"])]
-
-    lines = defaultdict(list[str])
-
-    for route_name in trips["route_id"].unique().__iter__():
-        trips_on_route = trips[trips["route_id"] == route_name]
-        sum_terminals = len(trips_on_route.index)
-        if sum_terminals < 8:
-            continue
-
-        parent_stations_count = trips_on_route["parent_station"].value_counts()
-        for parent_station in parent_stations_count[parent_stations_count == parent_stations_count.max()].index:
-            lines[trips_on_route[trips_on_route["parent_station"] == parent_station]["parent_station"].max()].append(route_name)
-
-    for stop, line_list in lines.items():
-        for a, b in itertools.pairwise(line_list):
-            try_combining_routes(a, stop, b, stop, trips)
-
-    return
-    deadheads = dist_lookup.construct_mat(list(lines.keys()))
-    deadheads = np.maximum(deadheads, deadheads.T)
-    np.fill_diagonal(deadheads, np.inf)
-    deadheads[np.triu_indices_from(deadheads, k=1)] = np.inf
-    possible_combinations = np.argwhere(deadheads <= 300)
-
-    for u, v in possible_combinations:
-        for a in list(lines.values())[u]:
-            for b in list(lines.values())[v]:
-                try_combining_routes(a, u, b, v, trips)
+    return route_vehicle_num

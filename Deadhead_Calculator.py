@@ -17,6 +17,7 @@ class DeadheadDistanceLookup:
             ending_stops
         ], ignore_index=True)
         self.stop_to_index = defaultdict(list)
+        self.parent_to_stop = defaultdict(list)
         for idx, stop_id in enumerate(all_stops):
             self.stop_to_index[stop_id].append(idx)
 

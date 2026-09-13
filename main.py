@@ -4,7 +4,8 @@ import gtfs_parser
 import Configuration
 import Deadhead_Calculator
 import Depot_Parser
-import Simple_Schedule
+import Interlining
+import Scheduler
 import Task_List_Builder
 
 
@@ -42,8 +43,11 @@ def create_schedule(config_path: str = 'config.json'):
 
     # Construct Vehicle Schedule
     print_message("Calculating Vehicle Schedule")
-    Simple_Schedule.build_schedule(tasks, deadhead_lookup, gtfs_data, config)
-    Simple_Schedule.interlining(tasks, gtfs_data, deadhead_lookup)
+    vehicles_line = Scheduler.build_schedule(tasks, deadhead_lookup, gtfs_data, config)
+    print(vehicles_line)
+
+    print_message("Find suitable Interlining")
+    Interlining.interlining(tasks, gtfs_data, deadhead_lookup, vehicles_line, config)
 
 
 if __name__ == '__main__':
