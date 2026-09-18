@@ -16,6 +16,9 @@ class Config(BaseModel):
     minimumTerminal: int = 5
     maximumTerminal: int = 40
 
+    interlining_Transition: int = 1
+    maxInterliningDeadhead: int = 5
+
     @classmethod
     def generate_config(cls, filepath: str = 'config.json'):
         default_config = cls()

@@ -44,8 +44,8 @@ def create_schedule(config_path: str = 'config.json'):
     # Construct Vehicle Schedule
     print_message("Calculating Vehicle Schedule")
     vehicles_line = Scheduler.build_schedule(tasks, deadhead_lookup, gtfs_data, config)
-    print(vehicles_line)
 
+    # Create Interlining Connections
     print_message("Find suitable Interlining")
     Interlining.interlining(tasks, gtfs_data, deadhead_lookup, vehicles_line, config)
 

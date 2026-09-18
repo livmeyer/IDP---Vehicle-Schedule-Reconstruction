@@ -1,4 +1,3 @@
-import csv
 import heapq
 from collections import defaultdict
 
@@ -24,23 +23,22 @@ def seconds_to_time(total_seconds: int) -> str:
 
 def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_terminal_sec: int, max_terminal_sec: int,
                    deadhead_lookup: DeadheadDistanceLookup, interlining_mapping: dict[str, dict[str, str]] = {}
-                   ) -> tuple[dict[str,int], list[dict[str, str | bool | int]], int, int]:
-    available_vehicles: defaultdict[int, list[str]] = defaultdict(list)
+                   ) -> tuple[dict[str, int], list[dict[str, str | bool | int]], int, int]:
+    available_vehicles: defaultdict[str, list[str]] = defaultdict(list)
     vehicles_and_trips: dict[str, int] = {}
     tasks["time_sec"] = tasks["time"].apply(time_to_seconds)
     assigned_vehicles = {}
 
     vehicle_id_counter = start_vehicle_id_counter
-    non_service_sec = 0
+    non_service_sec: int = 0
 
     vehicle_first_trip = {}
     vehicle_last_trip = {}
 
     deadhead_interlining_rows: list[dict[str, str | bool | int]] = []
-
     for trip in tasks.itertuples():
-        t_sec = trip.time_sec
-        station = trip.parent_station
+        t_sec: int = int(trip.time_sec)
+        station: str = trip.parent_station
 
         if trip.start:
             matched_vehicle = None
@@ -53,7 +51,7 @@ def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_termi
                 avail_time_sec, max_wait_sec, v_id = heapq.heappop(station_heap)
                 assigned_vehicles[trip.trip_id] = v_id
                 matched_vehicle = v_id
-                non_service_sec += t_sec - avail_time_sec
+                non_service_sec += int(t_sec) - int(avail_time_sec)
 
             if matched_vehicle is None:
                 v_id = vehicle_id_counter
@@ -69,28 +67,34 @@ def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_termi
         else:
             if (trip.route_id in interlining_mapping) and (trip.parent_station in interlining_mapping[trip.route_id]):
                 destination_id: str = interlining_mapping[trip.route_id][trip.parent_station]
-                dh_time: int = deadhead_lookup.get_duration(trip.stop_id, destination_id)
-                ready_sec = t_sec + dh_time
-                max_wait_sec = t_sec + dh_time + max_terminal_sec
-                non_service_sec += dh_time
+                station = tasks[tasks["stop_id"] == destination_id]["parent_station"].unique()[0]
+                if station != trip.parent_station:
+                    dh_time: int = deadhead_lookup.get_duration(trip.stop_id, destination_id)
+                    ready_sec = t_sec + dh_time + 60
+                    max_wait_sec = t_sec + dh_time + max_terminal_sec
+                    non_service_sec += dh_time
 
-                interlining_id: str = f"interlining_{trip.trip_id}"
+                    interlining_id: str = f"interlining_{trip.trip_id}"
 
-                deadhead_interlining_rows.extend([
-                    {
-                        "stop_id": trip.stop_id,
-                        "route_id": interlining_id,
-                        "trip_id": trip.trip_id,
-                        "time": seconds_to_time(t_sec),
-                        "start": True
-                    },
-                    {
-                        "stop_id": destination_id,
-                        "route_id": interlining_id,
-                        "trip_id": trip.trip_id,
-                        "time": seconds_to_time(t_sec + dh_time),
-                        "start": False,
-                    }, ])
+                    deadhead_interlining_rows.extend([
+                        {
+                            "stop_id": trip.stop_id,
+                            "route_id": interlining_id,
+                            "trip_id": trip.trip_id,
+                            "time": seconds_to_time(t_sec),
+                            "start": True,
+                        },
+                        {
+                            "stop_id": destination_id,
+                            "route_id": interlining_id,
+                            "trip_id": trip.trip_id,
+                            "time": seconds_to_time(t_sec + dh_time),
+                            "start": False,
+                        },
+                    ])
+                else:
+                    ready_sec = t_sec + 60  # TODO: Change to Config Value
+                    max_wait_sec = t_sec + max_terminal_sec
             else:
                 ready_sec = t_sec + min_terminal_sec
                 max_wait_sec = t_sec + max_terminal_sec
@@ -161,7 +165,7 @@ def schedule_tasks(tasks: pd.DataFrame, start_vehicle_id_counter: int, min_termi
         vehicles_and_trips[depart_trip_name] = vehicle
         vehicles_and_trips[return_trip_name] = vehicle
 
-    return [vehicles_and_trips, deadhead_interlining_rows, vehicle_id_counter, non_service_sec]
+    return vehicles_and_trips, deadhead_interlining_rows, vehicle_id_counter, non_service_sec
 
 
 def build_schedule(
@@ -217,7 +221,6 @@ def build_schedule(
 
     trips.to_csv("sup_trips.csv", index=False)
     vehicle_assignment_df.to_csv("sup_vehicleAssignments.csv", index=False)
-
 
     print(f"Total nonoperational time (seconds): {total_nonservice_sec} ({seconds_to_time(total_nonservice_sec)})")
     return route_vehicle_num
